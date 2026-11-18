@@ -246,10 +246,22 @@
 
         .input-area {
             padding: 10px 12px; padding-bottom: calc(10px + env(safe-area-inset-bottom));
-            display: flex; gap: 10px; align-items: center; flex-shrink: 0;
+            display: flex; gap: 10px; align-items: flex-end; flex-shrink: 0;
             border-top: 1px solid var(--border-glow);
         }
-        #messageInput { flex: 1; min-width: 0; margin: 0; }
+        textarea {
+            width: 100%; padding: 14px; margin-bottom: 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px; color: white; font-size: 16px; outline: none;
+            font-family: inherit; resize: none;
+        }
+        textarea:focus { border-color: var(--neon-purple); box-shadow: 0 0 10px rgba(188, 19, 254, 0.2); }
+        #messageInput {
+            flex: 1; min-width: 0; margin: 0; resize: none;
+            max-height: 140px; overflow-y: auto;
+        }
+        #sendBtn { margin-bottom: 2px; }
         #sendBtn {
             width: auto; padding: 12px 20px;
             background: linear-gradient(135deg, var(--neon-purple), var(--neon-blue));
@@ -359,10 +371,15 @@
         .unread-badge {
             min-width: 20px; height: 20px; padding: 0 6px;
             border-radius: 12px;
-            background: linear-gradient(135deg, var(--neon-purple), var(--neon-blue));
+            background: linear-gradient(135deg, #ff2d2d, #a30000);
             color: white; font-size: 12px; font-weight: 700;
             display: flex; align-items: center; justify-content: center;
-            box-shadow: 0 0 8px rgba(188, 19, 254, 0.45);
+            box-shadow: 0 0 8px rgba(255, 45, 45, 0.55);
+            animation: badgePop 0.25s ease-out;
+        }
+        @keyframes badgePop {
+            from { transform: scale(0.4); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
         }
 
         /* ===== СТАТУС (ОНЛАЙН / ЗАХОДИЛ) ===== */
@@ -389,6 +406,12 @@
             font-weight: 700; font-size: 14px; min-width: 0;
         }
         .post-time { margin-left: auto; font-size: 11px; opacity: 0.55; flex-shrink: 0; }
+        .post-edit-btn {
+            cursor: pointer; opacity: 0.6; font-size: 13px; flex-shrink: 0;
+            margin-left: 8px; user-select: none;
+        }
+        .post-edit-btn:hover { opacity: 1; }
+        .post-edited { font-size: 10px; opacity: 0.45; margin-left: 6px; flex-shrink: 0; }
         .post-text {
             font-size: 15px; line-height: 1.45; word-wrap: break-word;
             white-space: pre-wrap; margin-bottom: 10px;
@@ -424,6 +447,15 @@
         .comment-text { word-wrap: break-word; opacity: 0.92; }
         .comment-input-row { display: flex; gap: 8px; margin-top: 4px; }
         .comment-input-row input { margin: 0; padding: 9px 12px; font-size: 14px; }
+        .comment-input-row textarea {
+            margin: 0; padding: 9px 12px; font-size: 14px;
+            max-height: 100px; overflow-y: auto;
+        }
+        .comment-del {
+            cursor: pointer; opacity: 0.45; flex-shrink: 0;
+            font-size: 12px; user-select: none; margin-left: auto;
+        }
+        .comment-del:hover { opacity: 1; }
         .comment-input-row button {
             padding: 8px 14px;
             background: linear-gradient(135deg, var(--neon-purple), var(--neon-blue));
@@ -659,7 +691,7 @@
             <div id="messages"></div>
             <div id="channelOnlyHint" class="channel-hint hidden">📣 Писать в канал может только владелец CHatter</div>
             <div class="input-area" id="chatInputArea">
-                <input type="text" id="messageInput" placeholder="Сообщение..." autocomplete="off">
+                <textarea id="messageInput" rows="1" placeholder="Сообщение..." autocomplete="off"></textarea>
                 <button id="sendBtn">➤</button>
             </div>
         </div>
@@ -687,7 +719,7 @@
         } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
         import {
             getDatabase, ref, push, onChildAdded, onValue, set, update, get, remove,
-            runTransaction, onDisconnect
+            runTransaction, onDisconnect, serverTimestamp
         } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
         const firebaseConfig = {
@@ -704,6 +736,108 @@
         const auth = getAuth(app);
         const db = getDatabase(app);
 
+        // ===== PUSH-УВЕДОМЛЕНИЯ (ВЕБ + ANDROID) =====
+        const PUSH_CONFIG = {
+            vapidKey: "BKCV4EwCtVjFsoPgSaqxWBwaJ2EOatJx-iZTgCkD3ILzmTudtm4-NtnTLxSE6Ry_qKi4rUwnWlSet7QvIRtG8vM",
+            scriptUrl: "https://script.google.com/macros/s/AKfycbyrf6AY5nB77N16TjiQKHP4jT-53MwtkgO0yey9Z7wgoS5jbDnCzuH_pjWRWOkdmvwY/exec",
+            secret: "chatterPush7Kx9Qm42",
+            siteUrl: "https://chatter-717c2.web.app/"
+        };
+        const IS_CORDOVA = !!(window.cordova && window.cordova.plugins && window.cordova.plugins.firebase);
+        let pushRegistered = false;
+
+        function sanitizeTokenKey(t) {
+            return t.replace(/[.#$\[\]\/]/g, '_');
+        }
+
+        async function savePushToken(token, platform) {
+            if (!currentUser || !token) return;
+            try {
+                await set(ref(db, 'pushTokens/' + currentUser.uid + '/' + sanitizeTokenKey(token)), {
+                    token: token,
+                    platform: platform,
+                    updated: Date.now()
+                });
+            } catch (e) { console.error('savePushToken:', e); }
+        }
+
+        async function registerPush() {
+            if (pushRegistered) return;
+            pushRegistered = true;
+            try {
+                if (IS_CORDOVA) {
+                    // ===== ANDROID (нативный FCM через плагин) =====
+                    const plugin = window.cordova.plugins.firebase.messaging;
+                    if (plugin.requestPermission) {
+                        try { await plugin.requestPermission(); } catch (e) {}
+                    }
+                    try {
+                        const token = await plugin.getToken();
+                        await savePushToken(token, 'android');
+                    } catch (e) { console.error('fcm getToken:', e); }
+                    plugin.onTokenRefresh(function (t) { savePushToken(t, 'android'); });
+                } else if ('serviceWorker' in navigator && 'Notification' in window) {
+                    // ===== ВЕБ (сервис-воркер + VAPID) =====
+                    if (Notification.permission !== 'granted') return;
+                    const mod = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging.js');
+                    const reg = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+                    await navigator.serviceWorker.ready;
+                    const messaging = mod.getMessaging(app);
+                    const token = await mod.getToken(messaging, {
+                        vapidKey: PUSH_CONFIG.vapidKey,
+                        serviceWorkerRegistration: reg
+                    });
+                    if (token) await savePushToken(token, 'web');
+                }
+            } catch (e) {
+                console.error('registerPush:', e);
+                pushRegistered = false;
+            }
+        }
+
+        async function collectPushTargets(uids) {
+            const targets = [];
+            for (const uid of uids) {
+                if (uid === currentUser.uid) continue;
+                const known = findUser(uid);
+                if (known && known.online) continue; // онлайн получит всё в открытой вкладке
+                try {
+                    const snap = await get(ref(db, 'pushTokens/' + uid));
+                    if (!snap.exists()) continue;
+                    const val = snap.val();
+                    Object.keys(val).forEach(k => {
+                        const rec = val[k];
+                        if (rec && rec.token) targets.push({ token: rec.token, platform: rec.platform || 'web' });
+                    });
+                } catch (e) {}
+            }
+            return targets;
+        }
+
+        function sendPushRequest(targets, title, body, chatId) {
+            if (!targets.length) return;
+            try {
+                fetch(PUSH_CONFIG.scriptUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify({
+                        secret: PUSH_CONFIG.secret,
+                        tokens: targets,
+                        title: title,
+                        body: body,
+                        chatId: chatId || ''
+                    })
+                }).catch(function () {});
+            } catch (e) {}
+        }
+
+        async function pushForUids(uids, title, body, chatId) {
+            try {
+                const targets = await collectPushTargets(uids);
+                sendPushRequest(targets, title, body, chatId);
+            } catch (e) {}
+        }
+
         // ===== АККАУНТ ПОДДЕРЖКИ =====
         // Юз аккаунта, который отвечает в чатах поддержки.
         const SUPPORT_USER_ID = '@CHatter_admin';
@@ -711,7 +845,7 @@
         // ===== ОФИЦИАЛЬНЫЙ КАНАЛ =====
         // Канал глобальный: он есть у всех пользователей автоматически.
         const CHANNEL_ID = 'chatter_official_channel';
-        const CHANNEL_NAME = 'CHatter Поддержка';
+        const CHANNEL_NAME = 'CHatter Новости';
         const CHANNEL_SUBTITLE = 'Новости и обновления CHatter';
         const REACTION_EMOJIS = ['👍', '❤️', '🔥', '😂', '😮', '🎉'];
 
@@ -730,6 +864,7 @@
         let channelPosts = [];
         let expandedComments = new Set();
         let presenceUnsub = null;
+    let editingPostId = null;
 
         // ===== СВОИ УВЕДОМЛЕНИЯ =====
         function toast(message, type) {
@@ -992,6 +1127,8 @@
                 console.error('ensureProfile:', e);
             }
             await ensureChannel();
+            await cleanupBot();
+            registerPush();
         }
 
         // Канал существует всегда — и для старых, и для новых пользователей
@@ -1018,6 +1155,52 @@
             }
         }
 
+                // ===== ЧИСТКА: ПОЛНОСТЬЮ УБИРАЕМ CHatter BOT =====
+        // Бот — это, скорее всего, старый канал из прошлой версии (type: 'channel' со старым id).
+        // 1) Удаляем такие записи из базы (чат, сообщения, профиль из users).
+        // 2) На всякий случай они всё равно не отрисовываются — см. isHiddenSystemChat.
+        function isHiddenSystemChat(chat) {
+            if (!chat) return false;
+            if (chat.id === CHANNEL_ID) return false; // настоящий канал не трогаем
+            if (chat.type === 'bot') return true;
+            const nm = (chat.name || '').toLowerCase().replace(/\s+/g, ' ');
+            if (nm.includes('chatter bot') || nm.includes('chatterbot')) return true;
+            // Старые дубликаты официального канала (созданы прошлой версией)
+            if (chat.type === 'channel') return true;
+            return false;
+        }
+
+        async function cleanupBot() {
+            try {
+                const chatsSnap = await get(ref(db, 'chats'));
+                if (chatsSnap.exists()) {
+                    const doomed = [];
+                    chatsSnap.forEach(child => {
+                        const chat = Object.assign({ id: child.key }, child.val() || {});
+                        if (isHiddenSystemChat(chat)) doomed.push(child.key);
+                    });
+                    for (const id of doomed) {
+                        remove(ref(db, 'messages/' + id)).catch(() => {});
+                        remove(ref(db, 'chats/' + id)).catch(() => {});
+                    }
+                    if (doomed.length) console.log('cleanupBot: удалены чаты', doomed);
+                }
+                const usersSnap = await get(ref(db, 'users'));
+                if (usersSnap.exists()) {
+                    usersSnap.forEach(child => {
+                        const u = child.val() || {};
+                        const nm = (u.name || '').toLowerCase();
+                        const uid = (u.userId || '').toLowerCase();
+                        if (nm.includes('chatter bot') || nm.includes('chatterbot') || uid === '@chatter_bot') {
+                            remove(ref(db, 'users/' + child.key)).catch(() => {});
+                        }
+                    });
+                }
+            } catch (e) {
+                console.error('cleanupBot:', e);
+            }
+        }
+
         // ===== Подписки на данные =====
         function startListeners() {
             stopListeners();
@@ -1025,7 +1208,11 @@
             usersUnsub = onValue(ref(db, 'users'), (snap) => {
                 allUsers = [];
                 snap.forEach(child => {
-                    allUsers.push(Object.assign({ uid: child.key }, child.val()));
+                    const u = child.val() || {};
+                    const nm = (u.name || '').toLowerCase();
+                    const uid = (u.userId || '').toLowerCase();
+                    if (nm.includes('chatter bot') || nm.includes('chatterbot') || uid === '@chatter_bot') return;
+                    allUsers.push(Object.assign({ uid: child.key }, u));
                 });
                 renderPeopleTab();
                 renderProfile();
@@ -1040,11 +1227,13 @@
                 snap.forEach(child => {
                     const chat = Object.assign({ id: child.key }, child.val());
                     if (!chat) return;
+                    // Бот и старые дубликаты канала скрываем полностью
+                    if (isHiddenSystemChat(chat)) return;
                     allChats.push(chat);
                     if (chat.members && chat.members[currentUser.uid]) {
                         const myDeleted = chat.deletedBy && chat.deletedBy[currentUser.uid];
-                        // Свои удалённые чаты не показываем (поддержку удалить нельзя в принципе)
-                        if (!myDeleted || isSupportChat(chat)) myChats.push(chat);
+                        // Свои удалённые чаты не показываем
+                        if (!myDeleted) myChats.push(chat);
                     }
                 });
                 // Официальный канал глобальный — он есть у всех, подписка не нужна
@@ -1061,6 +1250,19 @@
                     if (pa !== pb) return pb - pa;
                     return (b.lastTime || b.createdAt || 0) - (a.lastTime || a.createdAt || 0);
                 });
+                // Уведомления: сообщение пришло в чат, который сейчас не открыт
+                myChats.forEach(chat => {
+                    if (isDeletedByOther(chat)) return;
+                    const lt = chat.lastTime || 0;
+                    const prev = prevChatTimes[chat.id];
+                    prevChatTimes[chat.id] = lt;
+                    if (prev === undefined || lt <= prev) return;
+                    if (currentChatId === chat.id) return;
+                    const unread = (chat.unreadCount && chat.unreadCount[currentUser.uid]) || 0;
+                    if (unread <= 0) return;
+                    showIncomingNotification(chatDisplayName(chat), chat.lastText || 'Новое сообщение', chat.id);
+                });
+
                 renderChatsList(myChats);
             });
         }
@@ -1075,7 +1277,64 @@
             channelPosts = [];
             expandedComments.clear();
             allChats = [];
+            prevChatTimes = {};
         }
+
+        // ===== УВЕДОМЛЕНИЯ О НОВЫХ СООБЩЕНИЯХ =====
+        function autogrow(el, max) {
+            el.style.height = 'auto';
+            el.style.height = Math.min(el.scrollHeight, max) + 'px';
+        }
+
+        let prevChatTimes = {};
+        let activeNotifications = [];
+
+        function playPing() {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain); gain.connect(ctx.destination);
+                osc.frequency.value = 880;
+                gain.gain.setValueAtTime(0.04, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.25);
+                osc.start(); osc.stop(ctx.currentTime + 0.25);
+            } catch (e) {}
+        }
+
+        function showIncomingNotification(title, body, chatId) {
+            if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+                try {
+                    const n = new Notification(title, {
+                        body: body,
+                        tag: 'chatter-' + chatId,
+                        icon: 'logo.png',
+                        renotify: true
+                    });
+                    activeNotifications.push(n);
+                    n.onclick = () => {
+                        window.focus();
+                        const chat = allChats.find(c => c.id === chatId);
+                        if (chat) openChat(chat);
+                        n.close();
+                    };
+                } catch (e) {
+                    toast(title + ': ' + body, 'info');
+                }
+            } else if (document.hidden) {
+                toast(title + ': ' + body, 'info');
+            } else if (currentChatId !== chatId) {
+                toast(title + ': ' + body, 'info');
+            }
+            playPing();
+        }
+
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                activeNotifications.forEach(n => { try { n.close(); } catch (e) {} });
+                activeNotifications = [];
+            }
+        });
 
         // ===== Список чатов =====
         function renderChatsList(chats) {
@@ -1189,8 +1448,8 @@
             if (currentChat) {
                 const isChannel = isChannelChat(currentChat);
                 pinChatMenuItem.classList.toggle('hidden', isChannel);
-                // В чате поддержки и в канале выхода нет — удалить их невозможно
-                leaveChatMenuItem.classList.toggle('hidden', isChannel || isSupportChat(currentChat));
+                // В канале выхода нет — удалить его нельзя
+                leaveChatMenuItem.classList.toggle('hidden', isChannel);
             }
             chatMenuDropdown.classList.toggle('hidden');
         });
@@ -1263,7 +1522,17 @@
         leaveChatMenuItem.addEventListener('click', () => {
             chatMenuDropdown.classList.add('hidden');
             if (!currentChat) return;
-            if (isSupportChat(currentChat) || isChannelChat(currentChat)) return; // поддержку и канал удалить нельзя
+            if (isChannelChat(currentChat)) return; // канал удалить нельзя
+
+            if (isSupportChat(currentChat)) {
+                showConfirm(
+                    'Удаление чата поддержки',
+                    'Удалить чат поддержки из списка? Вернуть его можно в любой момент через «Чат с поддержкой» в профиле.',
+                    'Удалить',
+                    () => hideSupportChat(currentChat.id)
+                );
+                return;
+            }
 
             if (currentChat.type === 'private') {
                 const otherId = otherUserId(currentChat);
@@ -1286,6 +1555,18 @@
             }
         });
 
+        async function hideSupportChat(chatId) {
+            try {
+                await set(ref(db, 'chats/' + chatId + '/deletedBy/' + currentUser.uid), Date.now());
+                closeChatOverlays();
+                showFull('appShell');
+                switchTab('chats');
+                toast('Чат поддержки удалён', 'success');
+            } catch (e) {
+                toast('Ошибка удаления: ' + e.message, 'error');
+            }
+        }
+
         async function deletePrivateChat(chatId) {
             try {
                 const snap = await get(ref(db, 'chats/' + chatId));
@@ -1307,8 +1588,8 @@
                     Object.keys(members).every(uid => deletedBy[uid]);
 
                 if (allDeleted) {
-                    await remove(ref(db, 'chats/' + chatId));
                     await remove(ref(db, 'messages/' + chatId));
+                    await remove(ref(db, 'chats/' + chatId));
                 }
 
                 closeChatOverlays();
@@ -1356,6 +1637,12 @@
                 c.members[support.uid]
             );
             if (existing) {
+                // Если чат ранее удалили из списка — снимаем пометку
+                if (existing.deletedBy && existing.deletedBy[currentUser.uid]) {
+                    try {
+                        await set(ref(db, 'chats/' + existing.id + '/deletedBy/' + currentUser.uid), null);
+                    } catch (e) { /* не критично */ }
+                }
                 // Если когда-то открепили — вернём на место, чтобы не потерялся
                 if (!isPinnedByMe(existing)) {
                     try {
@@ -1679,6 +1966,7 @@
             const admin = isAdminUser();
             document.getElementById('chatInputArea').classList.toggle('hidden', isChannel ? !admin : isDeletedByOther(chat));
             document.getElementById('channelOnlyHint').classList.toggle('hidden', !(isChannel && !admin));
+            editingPostId = null;
             document.getElementById('messageInput').placeholder = isChannel ? 'Написать пост в канал...' : 'Сообщение...';
             document.getElementById('messages').innerHTML = '';
             showFull('chatScreen');
@@ -1782,10 +2070,27 @@
                 if (!isAdminUser()) {
                     toast('Писать в канал может только владелец CHatter', 'error');
                     input.value = '';
+                    autogrow(input, 140);
+                    return;
+                }
+                if (editingPostId) {
+                    const pid = editingPostId;
+                    update(ref(db, 'channelPosts/' + pid), {
+                        text: text,
+                        edited: true,
+                        editedAt: Date.now()
+                    }).then(() => toast('Пост обновлён ✏️', 'success'))
+                      .catch(e => toast('Ошибка правки: ' + e.message, 'error'));
+                    update(ref(db, 'chats/' + CHANNEL_ID), { lastText: text });
+                    editingPostId = null;
+                    input.value = '';
+                    input.placeholder = 'Написать пост в канал...';
+                    autogrow(input, 140);
                     return;
                 }
                 publishChannelPost(text);
                 input.value = '';
+                autogrow(input, 140);
                 return;
             }
 
@@ -1808,13 +2113,29 @@
                 runTransaction(ref(db, 'chats/' + currentChatId + '/unreadCount/' + uid), (cur) => (cur || 0) + 1).catch(() => {});
             });
 
+            // Пуш-уведомление тем, кто офлайн
+            pushForUids(Object.keys(members), userName(me), text, currentChatId);
+
             input.value = '';
+            autogrow(input, 140);
         }
 
         document.getElementById('sendBtn').addEventListener('click', sendMessage);
         document.getElementById('messageInput').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') sendMessage();
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+                return;
+            }
+            if (e.key === 'Escape' && editingPostId) {
+                editingPostId = null;
+                const input = document.getElementById('messageInput');
+                input.value = '';
+                input.placeholder = isChannelChat(currentChat) ? 'Написать пост в канал...' : 'Сообщение...';
+                autogrow(input, 140);
+            }
         });
+        document.getElementById('messageInput').addEventListener('input', function () { autogrow(this, 140); });
 
         // ===== КАНАЛ: ПОСТЫ, РЕАКЦИИ, ПРОСМОТРЫ, КОММЕНТАРИИ =====
         function publishChannelPost(text) {
@@ -1838,6 +2159,9 @@
                 if (u.uid === currentUser.uid) return;
                 runTransaction(ref(db, 'chats/' + CHANNEL_ID + '/unreadCount/' + u.uid), (cur) => (cur || 0) + 1).catch(() => {});
             });
+
+            // Пуш-уведомление всем офлайн-пользователям
+            pushForUids(allUsers.map(u => u.uid), CHANNEL_NAME + ' \u00b7 ' + userName(me), text, CHANNEL_ID);
         }
 
         function markChannelViewed() {
@@ -1886,6 +2210,27 @@
             head.appendChild(ava);
             head.appendChild(author);
             head.appendChild(time);
+            if (post.edited) {
+                const ed = document.createElement('span');
+                ed.className = 'post-edited';
+                ed.textContent = 'изменено';
+                head.appendChild(ed);
+            }
+            if (isAdminUser()) {
+                const editBtn = document.createElement('div');
+                editBtn.className = 'post-edit-btn';
+                editBtn.textContent = '✏️';
+                editBtn.title = 'Редактировать пост';
+                editBtn.addEventListener('click', () => {
+                    editingPostId = post.id;
+                    const input = document.getElementById('messageInput');
+                    input.value = post.text;
+                    input.placeholder = 'Редактирование поста... (Esc — отмена)';
+                    autogrow(input, 140);
+                    input.focus();
+                });
+                head.appendChild(editBtn);
+            }
             div.appendChild(head);
 
             const textDiv = document.createElement('div');
@@ -1913,9 +2258,21 @@
                 }
                 btn.addEventListener('click', async () => {
                     try {
-                        const path = 'channelPosts/' + post.id + '/reactions/' + emoji + '/' + currentUser.uid;
-                        const snap = await get(ref(db, path));
-                        await set(ref(db, path), snap.exists() ? null : true);
+                        // Одна реакция от пользователя: снимаем все свои, ставим выбранную
+                        const snap = await get(ref(db, 'channelPosts/' + post.id + '/reactions'));
+                        const all = snap.val() || {};
+                        const updates = {};
+                        let mine = null;
+                        Object.keys(all).forEach(e2 => {
+                            if (all[e2] && all[e2][currentUser.uid]) {
+                                updates[e2 + '/' + currentUser.uid] = null;
+                                mine = e2;
+                            }
+                        });
+                        if (mine !== emoji) {
+                            updates[emoji + '/' + currentUser.uid] = true;
+                        }
+                        await update(ref(db, 'channelPosts/' + post.id + '/reactions'), updates);
                     } catch (e) {
                         toast('Ошибка: ' + e.message, 'error');
                     }
@@ -1972,13 +2329,37 @@
                     t.textContent = cm.text;
                     line.appendChild(a);
                     line.appendChild(t);
+                    // Свои комментарии (и любые — для владельца) можно удалить
+                    if (currentUser && (cm.uid === currentUser.uid || isAdminUser())) {
+                        const del = document.createElement('span');
+                        del.className = 'comment-del';
+                        del.textContent = '🗑';
+                        del.title = 'Удалить комментарий';
+                        del.addEventListener('click', (ev) => {
+                            ev.stopPropagation();
+                            showConfirm(
+                                'Удалить комментарий?',
+                                'Комментарий будет удалён для всех безвозвратно.',
+                                'Удалить',
+                                async () => {
+                                    try {
+                                        await remove(ref(db, 'channelPosts/' + post.id + '/comments/' + cid));
+                                        toast('Комментарий удалён', 'success');
+                                    } catch (err) {
+                                        toast('Ошибка: ' + err.message, 'error');
+                                    }
+                                }
+                            );
+                        });
+                        line.appendChild(del);
+                    }
                     block.appendChild(line);
                 });
 
                 const inputRow = document.createElement('div');
                 inputRow.className = 'comment-input-row';
-                const inp = document.createElement('input');
-                inp.type = 'text';
+                const inp = document.createElement('textarea');
+                inp.rows = 1;
                 inp.placeholder = 'Написать комментарий...';
                 inp.maxLength = 500;
                 const btn = document.createElement('button');
@@ -1998,9 +2379,16 @@
                         return;
                     }
                     inp.value = '';
+                    autogrow(inp, 100);
                 };
                 btn.addEventListener('click', sendComment);
-                inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendComment(); });
+                inp.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        sendComment();
+                    }
+                });
+                inp.addEventListener('input', function () { autogrow(this, 100); });
                 inputRow.appendChild(inp);
                 inputRow.appendChild(btn);
                 block.appendChild(inputRow);
@@ -2101,7 +2489,7 @@
             const statusRef = ref(db, 'users/' + currentUser.uid);
             presenceUnsub = onValue(ref(db, '.info/connected'), (snap) => {
                 if (snap.val() === true) {
-                    onDisconnect(statusRef).update({ online: false, lastSeen: Date.now() })
+                    onDisconnect(statusRef).update({ online: false, lastSeen: serverTimestamp() })
                         .then(() => update(statusRef, { online: true, lastSeen: Date.now() }))
                         .catch(() => {});
                 }
@@ -2232,6 +2620,10 @@
 
         // ===== Старт =====
         document.getElementById('enterAppBtn').addEventListener('click', () => {
+            // Просим разрешение на системные уведомления (один раз)
+            if ('Notification' in window && Notification.permission === 'default') {
+                try { Notification.requestPermission(); } catch (e) {}
+            }
             showFull('appShell');
             switchTab('chats');
         });
