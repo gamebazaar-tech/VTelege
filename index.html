@@ -350,6 +350,90 @@
         .toast.info    { border-color: var(--neon-blue); }
         .toast.out     { opacity: 0; transform: translateY(-12px); }
         @keyframes toastIn { from { opacity: 0; transform: translateY(-14px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* ===== СЧЁТЧИК НЕПРОЧИТАННЫХ ===== */
+        .item-right {
+            display: flex; flex-direction: column; align-items: flex-end;
+            gap: 5px; flex-shrink: 0;
+        }
+        .unread-badge {
+            min-width: 20px; height: 20px; padding: 0 6px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, var(--neon-purple), var(--neon-blue));
+            color: white; font-size: 12px; font-weight: 700;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 0 8px rgba(188, 19, 254, 0.45);
+        }
+
+        /* ===== СТАТУС (ОНЛАЙН / ЗАХОДИЛ) ===== */
+        .presence-online { color: #00ff9d; }
+        .presence-offline { color: rgba(255,255,255,0.5); }
+
+        /* ===== ОФИЦИАЛЬНЫЙ КАНАЛ ===== */
+        .channel-post {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border-glow);
+            border-radius: 16px;
+            padding: 12px 14px;
+            animation: popIn 0.2s ease-out;
+        }
+        .post-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+        .post-ava {
+            width: 36px; height: 36px; border-radius: 50%;
+            background: linear-gradient(135deg, #1d9bf0, #0a3d91);
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 700; color: #fff; flex-shrink: 0;
+        }
+        .post-author {
+            display: flex; align-items: center; gap: 5px;
+            font-weight: 700; font-size: 14px; min-width: 0;
+        }
+        .post-time { margin-left: auto; font-size: 11px; opacity: 0.55; flex-shrink: 0; }
+        .post-text {
+            font-size: 15px; line-height: 1.45; word-wrap: break-word;
+            white-space: pre-wrap; margin-bottom: 10px;
+        }
+        .post-reactions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+        .reaction-btn {
+            display: inline-flex; align-items: center; gap: 5px;
+            padding: 4px 10px; border-radius: 14px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: white; font-size: 14px; cursor: pointer;
+            transition: transform 0.1s, border-color 0.2s, background 0.2s;
+        }
+        .reaction-btn:active { transform: scale(0.92); }
+        .reaction-btn .rc { font-size: 12px; opacity: 0.85; }
+        .reaction-btn.active {
+            border-color: var(--neon-blue);
+            background: rgba(0, 243, 255, 0.12);
+            color: var(--neon-blue);
+        }
+        .post-footer {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 13px; color: var(--neon-blue);
+            cursor: pointer; user-select: none;
+        }
+        .post-views { margin-left: auto; font-size: 12px; color: rgba(255,255,255,0.75); cursor: default; }
+        .comments-block {
+            margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.08);
+            padding-top: 10px; display: flex; flex-direction: column; gap: 8px;
+        }
+        .comment-item { display: flex; gap: 8px; font-size: 13px; line-height: 1.4; }
+        .comment-author { font-weight: 600; color: var(--neon-blue); white-space: nowrap; flex-shrink: 0; }
+        .comment-text { word-wrap: break-word; opacity: 0.92; }
+        .comment-input-row { display: flex; gap: 8px; margin-top: 4px; }
+        .comment-input-row input { margin: 0; padding: 9px 12px; font-size: 14px; }
+        .comment-input-row button {
+            padding: 8px 14px;
+            background: linear-gradient(135deg, var(--neon-purple), var(--neon-blue));
+            border-radius: 12px; font-size: 14px;
+        }
+        .channel-hint {
+            padding: 10px 12px; padding-bottom: calc(10px + env(safe-area-inset-bottom));
+            text-align: center; color: rgba(255,255,255,0.55); font-size: 13px;
+            flex-shrink: 0; border-top: 1px solid var(--border-glow);
+        }
     </style>
 </head>
 <body>
@@ -573,6 +657,7 @@
             </div>
 
             <div id="messages"></div>
+            <div id="channelOnlyHint" class="channel-hint hidden">📣 Писать в канал может только владелец CHatter</div>
             <div class="input-area" id="chatInputArea">
                 <input type="text" id="messageInput" placeholder="Сообщение..." autocomplete="off">
                 <button id="sendBtn">➤</button>
@@ -601,7 +686,8 @@
             updateProfile
         } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
         import {
-            getDatabase, ref, push, onChildAdded, onValue, set, update, get, remove
+            getDatabase, ref, push, onChildAdded, onValue, set, update, get, remove,
+            runTransaction, onDisconnect
         } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
         const firebaseConfig = {
@@ -622,6 +708,13 @@
         // Юз аккаунта, который отвечает в чатах поддержки.
         const SUPPORT_USER_ID = '@CHatter_admin';
 
+        // ===== ОФИЦИАЛЬНЫЙ КАНАЛ =====
+        // Канал глобальный: он есть у всех пользователей автоматически.
+        const CHANNEL_ID = 'chatter_official_channel';
+        const CHANNEL_NAME = 'CHatter Поддержка';
+        const CHANNEL_SUBTITLE = 'Новости и обновления CHatter';
+        const REACTION_EMOJIS = ['👍', '❤️', '🔥', '😂', '😮', '🎉'];
+
         // ===== Состояние =====
         let currentUser = null;
         let allUsers = [];
@@ -633,6 +726,10 @@
         let chatsUnsub = null;
         let messagesUnsub = null;
         let chatUnsub = null;
+        let channelPostsUnsub = null;
+        let channelPosts = [];
+        let expandedComments = new Set();
+        let presenceUnsub = null;
 
         // ===== СВОИ УВЕДОМЛЕНИЯ =====
         function toast(message, type) {
@@ -747,8 +844,14 @@
                 el.textContent = 'официальная поддержка';
                 return;
             }
+            if (chatType === 'channel') {
+                el.textContent = 'канал · ' + pluralSubscribers(allUsers.length);
+                return;
+            }
             if (chatType === 'private') {
-                el.textContent = 'личный чат';
+                const otherId = otherUserId(currentChat);
+                const other = otherId ? findUser(otherId) : null;
+                el.textContent = other ? lastSeenText(other) : 'личный чат';
                 return;
             }
             if (count === 1) {
@@ -769,6 +872,30 @@
         }
         function isSupportChat(chat) {
             return chat.type === 'support';
+        }
+        function isChannelChat(chat) {
+            return chat.type === 'channel';
+        }
+        function isAdminUser() {
+            const me = currentUser ? findUser(currentUser.uid) : null;
+            return !!me && (me.userId || '').toLowerCase() === SUPPORT_USER_ID.toLowerCase();
+        }
+        function pluralSubscribers(n) {
+            const mod10 = n % 10;
+            const mod100 = n % 100;
+            if (mod10 === 1 && mod100 !== 11) return n + ' подписчик';
+            if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return n + ' подписчика';
+            return n + ' подписчиков';
+        }
+        function lastSeenText(u) {
+            if (!u) return '';
+            if (u.online) return 'в сети';
+            if (!u.lastSeen) return 'не в сети';
+            const d = new Date(u.lastSeen);
+            const now = new Date();
+            const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            if (d.toDateString() === now.toDateString()) return 'заходил в ' + time;
+            return 'заходил ' + d.toLocaleDateString([], { day: '2-digit', month: '2-digit' }) + ' в ' + time;
         }
 
         // ===== СИСТЕМА ID =====
@@ -816,6 +943,7 @@
         }
         function chatDisplayName(chat) {
             if (chat.type === 'support') return 'Поддержка';
+            if (isChannelChat(chat)) return chat.name || CHANNEL_NAME;
             if (chat.type === 'private') {
                 const otherId = otherUserId(chat);
                 const other = otherId ? findUser(otherId) : null;
@@ -827,6 +955,7 @@
             if (isDeletedByOther(chat)) {
                 return 'Чат удалён пользователем';
             }
+            if (isChannelChat(chat)) return chat.lastText || CHANNEL_SUBTITLE;
             return chat.lastText || (chat.type === 'support' ? 'Задай вопрос — команда CHatter ответит здесь!' : (chat.type === 'private' ? 'Напиши первым!' : 'Группа создана — напиши первым!'));
         }
 
@@ -837,7 +966,7 @@
             const span = document.createElement('span');
             span.textContent = chatDisplayName(chat);
             el.appendChild(span);
-            if (isSupportChat(chat)) {
+            if (isSupportChat(chat) || isChannelChat(chat)) {
                 el.appendChild(makeVerifiedBadge());
             }
         }
@@ -862,6 +991,31 @@
             } catch (e) {
                 console.error('ensureProfile:', e);
             }
+            await ensureChannel();
+        }
+
+        // Канал существует всегда — и для старых, и для новых пользователей
+        async function ensureChannel() {
+            try {
+                const snap = await get(ref(db, 'chats/' + CHANNEL_ID));
+                const val = snap.exists() ? snap.val() : null;
+                if (!val || val.type !== 'channel') {
+                    await set(ref(db, 'chats/' + CHANNEL_ID), {
+                        type: 'channel',
+                        name: CHANNEL_NAME,
+                        subtitle: CHANNEL_SUBTITLE,
+                        createdAt: Date.now()
+                    });
+                } else if (val.name !== CHANNEL_NAME || val.subtitle !== CHANNEL_SUBTITLE) {
+                    // Если канал уже был — обновим название и описание на актуальные
+                    await update(ref(db, 'chats/' + CHANNEL_ID), {
+                        name: CHANNEL_NAME,
+                        subtitle: CHANNEL_SUBTITLE
+                    });
+                }
+            } catch (e) {
+                console.error('ensureChannel:', e);
+            }
         }
 
         // ===== Подписки на данные =====
@@ -875,6 +1029,9 @@
                 });
                 renderPeopleTab();
                 renderProfile();
+                if (currentChat && currentChat.type === 'private') {
+                    updateMemberCount(currentChat.members, currentChat.type);
+                }
             });
 
             chatsUnsub = onValue(ref(db, 'chats'), (snap) => {
@@ -890,8 +1047,15 @@
                         if (!myDeleted || isSupportChat(chat)) myChats.push(chat);
                     }
                 });
-                // Сначала закреплённые, потом по времени
+                // Официальный канал глобальный — он есть у всех, подписка не нужна
+                if (!myChats.some(c => c.id === CHANNEL_ID)) {
+                    const ch = allChats.find(c => c.id === CHANNEL_ID);
+                    myChats.push(ch || { id: CHANNEL_ID, type: 'channel', name: CHANNEL_NAME, subtitle: CHANNEL_SUBTITLE });
+                }
+                // Канал всегда первым, потом закреплённые, потом по времени
                 myChats.sort((a, b) => {
+                    if (a.id === CHANNEL_ID && b.id !== CHANNEL_ID) return -1;
+                    if (b.id === CHANNEL_ID && a.id !== CHANNEL_ID) return 1;
                     const pa = isPinnedByMe(a) ? 1 : 0;
                     const pb = isPinnedByMe(b) ? 1 : 0;
                     if (pa !== pb) return pb - pa;
@@ -906,6 +1070,10 @@
             if (chatsUnsub) { chatsUnsub(); chatsUnsub = null; }
             if (messagesUnsub) { messagesUnsub(); messagesUnsub = null; }
             if (chatUnsub) { chatUnsub(); chatUnsub = null; }
+            if (channelPostsUnsub) { channelPostsUnsub(); channelPostsUnsub = null; }
+            if (presenceUnsub) { presenceUnsub(); presenceUnsub = null; }
+            channelPosts = [];
+            expandedComments.clear();
             allChats = [];
         }
 
@@ -932,8 +1100,8 @@
                 if (chat.type === 'private') {
                     avatarUser = findUser(otherUserId(chat)) || null;
                     avatarCls = 'avatar-pink';
-                } else if (chat.type === 'support') {
-                    avatarUser = findSupportUser();
+                } else if (chat.type === 'support' || isChannelChat(chat)) {
+                    avatarUser = chat.type === 'support' ? findSupportUser() : null;
                     avatarCls = 'avatar-support';
                 }
                 item.appendChild(makeAvatar(displayName, avatarCls, avatarUser));
@@ -945,7 +1113,7 @@
                 const nameSpan = document.createElement('span');
                 nameSpan.textContent = (isPinnedByMe(chat) ? '📌 ' : '') + displayName;
                 nameDiv.appendChild(nameSpan);
-                if (isSupportChat(chat)) {
+                if (isSupportChat(chat) || isChannelChat(chat)) {
                     nameDiv.appendChild(makeVerifiedBadge());
                 }
                 const subDiv = document.createElement('div');
@@ -954,12 +1122,22 @@
                 info.appendChild(nameDiv);
                 info.appendChild(subDiv);
 
+                const rightDiv = document.createElement('div');
+                rightDiv.className = 'item-right';
+                const unread = (chat.unreadCount && chat.unreadCount[currentUser.uid]) || 0;
+                if (unread > 0) {
+                    const badge = document.createElement('div');
+                    badge.className = 'unread-badge';
+                    badge.textContent = unread > 99 ? '99+' : String(unread);
+                    rightDiv.appendChild(badge);
+                }
                 const timeDiv = document.createElement('div');
                 timeDiv.className = 'item-time';
                 timeDiv.textContent = chat.lastTime ? fmtTime(chat.lastTime) : '';
+                rightDiv.appendChild(timeDiv);
 
                 item.appendChild(info);
-                item.appendChild(timeDiv);
+                item.appendChild(rightDiv);
                 item.addEventListener('click', () => openChat(chat));
                 list.appendChild(item);
             });
@@ -1009,9 +1187,10 @@
         chatMenuBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             if (currentChat) {
-                pinChatMenuItem.textContent = isPinnedByMe(currentChat) ? '📌 Открепить чат' : '📌 Закрепить чат';
-                // В чате поддержки выхода нет — удалить его невозможно
-                leaveChatMenuItem.classList.toggle('hidden', isSupportChat(currentChat));
+                const isChannel = isChannelChat(currentChat);
+                pinChatMenuItem.classList.toggle('hidden', isChannel);
+                // В чате поддержки и в канале выхода нет — удалить их невозможно
+                leaveChatMenuItem.classList.toggle('hidden', isChannel || isSupportChat(currentChat));
             }
             chatMenuDropdown.classList.toggle('hidden');
         });
@@ -1043,6 +1222,7 @@
         pinChatMenuItem.addEventListener('click', async () => {
             chatMenuDropdown.classList.add('hidden');
             if (!currentChat) return;
+            if (isChannelChat(currentChat)) return; // канал нельзя закреплять
 
             const chatId = currentChat.id;
             const pinnedNow = isPinnedByMe(currentChat);
@@ -1083,7 +1263,7 @@
         leaveChatMenuItem.addEventListener('click', () => {
             chatMenuDropdown.classList.add('hidden');
             if (!currentChat) return;
-            if (isSupportChat(currentChat)) return; // поддержку удалить нельзя
+            if (isSupportChat(currentChat) || isChannelChat(currentChat)) return; // поддержку и канал удалить нельзя
 
             if (currentChat.type === 'private') {
                 const otherId = otherUserId(currentChat);
@@ -1286,6 +1466,12 @@
             }
         });
 
+        // Смена аватара кликом по аватару в профиле
+        document.getElementById('profileAvatar').addEventListener('click', () => {
+            avatarInput.value = '';
+            avatarInput.click();
+        });
+
         // ===== Люди (вкладка) =====
         const peopleSearchInput = document.getElementById('peopleSearchInput');
         peopleSearchInput.addEventListener('input', () => renderPeopleTab());
@@ -1333,10 +1519,15 @@
                 if ((u.userId || '').toLowerCase() === SUPPORT_USER_ID.toLowerCase()) {
                     nameDiv.appendChild(makeVerifiedBadge());
                 }
+                const presDiv = document.createElement('div');
+                presDiv.className = 'item-sub ' + (u.online ? 'presence-online' : 'presence-offline');
+                presDiv.textContent = u.online ? 'в сети' : (u.lastSeen ? lastSeenText(u) : 'не в сети');
+                info.appendChild(nameDiv);
+                info.appendChild(presDiv);
+
                 const subDiv = document.createElement('div');
                 subDiv.className = 'item-sub';
                 subDiv.textContent = u.userId || u.email || '';
-                info.appendChild(nameDiv);
                 info.appendChild(subDiv);
                 item.appendChild(info);
 
@@ -1483,9 +1674,17 @@
             currentChat = chat;
             setChatTitle(chat);
             updateMemberCount(chat.members, chat.type);
-            document.getElementById('chatInputArea').classList.toggle('hidden', isDeletedByOther(chat));
+
+            const isChannel = isChannelChat(chat);
+            const admin = isAdminUser();
+            document.getElementById('chatInputArea').classList.toggle('hidden', isChannel ? !admin : isDeletedByOther(chat));
+            document.getElementById('channelOnlyHint').classList.toggle('hidden', !(isChannel && !admin));
+            document.getElementById('messageInput').placeholder = isChannel ? 'Написать пост в канал...' : 'Сообщение...';
             document.getElementById('messages').innerHTML = '';
             showFull('chatScreen');
+
+            // Открыл чат — непрочитанные обнулены
+            resetUnread(chat.id);
 
             if (chatUnsub) { chatUnsub(); chatUnsub = null; }
             chatUnsub = onValue(ref(db, 'chats/' + chat.id), (snap) => {
@@ -1494,21 +1693,45 @@
                 currentChat = Object.assign({ id: chat.id }, c);
                 setChatTitle(currentChat);
                 updateMemberCount(c.members, c.type);
-                document.getElementById('chatInputArea').classList.toggle('hidden', isDeletedByOther(currentChat));
+                const ch = isChannelChat(currentChat);
+                document.getElementById('chatInputArea').classList.toggle('hidden', ch ? !isAdminUser() : isDeletedByOther(currentChat));
+                document.getElementById('channelOnlyHint').classList.toggle('hidden', !(ch && !isAdminUser()));
             });
 
+            if (channelPostsUnsub) { channelPostsUnsub(); channelPostsUnsub = null; }
             if (messagesUnsub) { messagesUnsub(); messagesUnsub = null; }
-            messagesUnsub = onChildAdded(ref(db, 'messages/' + chat.id), (snap) => {
-                appendMessage(snap.val());
-            });
+
+            if (isChannel) {
+                channelPostsUnsub = onValue(ref(db, 'channelPosts'), (snap) => {
+                    channelPosts = [];
+                    snap.forEach(ch => channelPosts.push(Object.assign({ id: ch.key }, ch.val())));
+                    channelPosts.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+                    renderChannelPosts();
+                    markChannelViewed();
+                    resetUnread(CHANNEL_ID);
+                });
+            } else {
+                messagesUnsub = onChildAdded(ref(db, 'messages/' + chat.id), (snap) => {
+                    appendMessage(snap.val());
+                    resetUnread(chat.id);
+                });
+            }
+        }
+
+        function resetUnread(chatId) {
+            if (!currentUser) return;
+            set(ref(db, 'chats/' + chatId + '/unreadCount/' + currentUser.uid), 0).catch(() => {});
         }
 
         function closeChatOverlays() {
             if (messagesUnsub) { messagesUnsub(); messagesUnsub = null; }
             if (chatUnsub) { chatUnsub(); chatUnsub = null; }
+            if (channelPostsUnsub) { channelPostsUnsub(); channelPostsUnsub = null; }
             currentChatId = null;
             currentChat = null;
             document.getElementById('chatInputArea').classList.remove('hidden');
+            document.getElementById('channelOnlyHint').classList.add('hidden');
+            document.getElementById('messageInput').placeholder = 'Сообщение...';
         }
 
         document.getElementById('backToChatsBtn').addEventListener('click', () => {
@@ -1554,6 +1777,18 @@
             const text = input.value.trim();
             if (!currentUser || !currentChatId || !text) return;
 
+            // В канал постит только владелец — даже из консоли не выйдет
+            if (isChannelChat(currentChat)) {
+                if (!isAdminUser()) {
+                    toast('Писать в канал может только владелец CHatter', 'error');
+                    input.value = '';
+                    return;
+                }
+                publishChannelPost(text);
+                input.value = '';
+                return;
+            }
+
             const me = findUser(currentUser.uid);
             push(ref(db, 'messages/' + currentChatId), {
                 senderId: currentUser.uid,
@@ -1565,6 +1800,14 @@
                 lastText: text,
                 lastTime: Date.now()
             });
+
+            // Непрочитанные другим участникам чата
+            const members = (currentChat && currentChat.members) || {};
+            Object.keys(members).forEach(uid => {
+                if (uid === currentUser.uid) return;
+                runTransaction(ref(db, 'chats/' + currentChatId + '/unreadCount/' + uid), (cur) => (cur || 0) + 1).catch(() => {});
+            });
+
             input.value = '';
         }
 
@@ -1572,6 +1815,200 @@
         document.getElementById('messageInput').addEventListener('keydown', (e) => {
             if (e.key === 'Enter') sendMessage();
         });
+
+        // ===== КАНАЛ: ПОСТЫ, РЕАКЦИИ, ПРОСМОТРЫ, КОММЕНТАРИИ =====
+        function publishChannelPost(text) {
+            const me = findUser(currentUser.uid);
+            push(ref(db, 'channelPosts'), {
+                text: text,
+                ts: Date.now(),
+                authorUid: currentUser.uid,
+                authorName: userName(me)
+            }).then(() => {
+                toast('Пост опубликован 📣', 'success');
+            }).catch(e => toast('Ошибка публикации: ' + e.message, 'error'));
+
+            update(ref(db, 'chats/' + CHANNEL_ID), {
+                lastText: text,
+                lastTime: Date.now()
+            });
+
+            // Пост непрочитан для всех остальных пользователей
+            allUsers.forEach(u => {
+                if (u.uid === currentUser.uid) return;
+                runTransaction(ref(db, 'chats/' + CHANNEL_ID + '/unreadCount/' + u.uid), (cur) => (cur || 0) + 1).catch(() => {});
+            });
+        }
+
+        function markChannelViewed() {
+            if (!currentUser) return;
+            channelPosts.forEach(post => {
+                if (!(post.views && post.views[currentUser.uid])) {
+                    set(ref(db, 'channelPosts/' + post.id + '/views/' + currentUser.uid), true).catch(() => {});
+                }
+            });
+        }
+
+        function renderChannelPosts() {
+            if (!currentUser) return;
+            const msgs = document.getElementById('messages');
+            const wasBottom = msgs.scrollTop + msgs.clientHeight >= msgs.scrollHeight - 60;
+            msgs.innerHTML = '';
+
+            if (channelPosts.length === 0) {
+                const hint = document.createElement('div');
+                hint.className = 'empty-hint';
+                hint.textContent = 'Постов пока нет. Важные новости и обновления появятся здесь 📣';
+                msgs.appendChild(hint);
+                return;
+            }
+
+            channelPosts.forEach(post => msgs.appendChild(makeChannelPost(post)));
+            if (wasBottom) msgs.scrollTop = msgs.scrollHeight;
+        }
+
+        function makeChannelPost(post) {
+            const div = document.createElement('div');
+            div.className = 'channel-post';
+
+            const head = document.createElement('div');
+            head.className = 'post-head';
+            const ava = document.createElement('div');
+            ava.className = 'post-ava';
+            ava.textContent = 'C';
+            const author = document.createElement('div');
+            author.className = 'post-author';
+            author.textContent = CHANNEL_NAME;
+            author.appendChild(makeVerifiedBadge());
+            const time = document.createElement('div');
+            time.className = 'post-time';
+            time.textContent = fmtTime(post.ts);
+            head.appendChild(ava);
+            head.appendChild(author);
+            head.appendChild(time);
+            div.appendChild(head);
+
+            const textDiv = document.createElement('div');
+            textDiv.className = 'post-text';
+            textDiv.textContent = post.text;
+            div.appendChild(textDiv);
+
+            // Реакции (как в Telegram: эмодзи + количество)
+            const reactions = post.reactions || {};
+            const row = document.createElement('div');
+            row.className = 'post-reactions';
+            REACTION_EMOJIS.forEach(emoji => {
+                const users = reactions[emoji] || {};
+                const count = Object.keys(users).length;
+                const btn = document.createElement('div');
+                btn.className = 'reaction-btn' + (users[currentUser.uid] ? ' active' : '');
+                const emo = document.createElement('span');
+                emo.textContent = emoji;
+                btn.appendChild(emo);
+                if (count > 0) {
+                    const c = document.createElement('span');
+                    c.className = 'rc';
+                    c.textContent = count;
+                    btn.appendChild(c);
+                }
+                btn.addEventListener('click', async () => {
+                    try {
+                        const path = 'channelPosts/' + post.id + '/reactions/' + emoji + '/' + currentUser.uid;
+                        const snap = await get(ref(db, path));
+                        await set(ref(db, path), snap.exists() ? null : true);
+                    } catch (e) {
+                        toast('Ошибка: ' + e.message, 'error');
+                    }
+                });
+                row.appendChild(btn);
+            });
+            div.appendChild(row);
+
+            // Подвал: комментарии + просмотры
+            const footer = document.createElement('div');
+            footer.className = 'post-footer';
+            const views = Object.keys(post.views || {}).length;
+            const comments = post.comments ? Object.keys(post.comments).length : 0;
+            const commSpan = document.createElement('span');
+            commSpan.textContent = expandedComments.has(post.id)
+                ? '💬 Скрыть комментарии'
+                : '💬 Комментарии' + (comments > 0 ? ' (' + comments + ')' : '');
+            const viewsSpan = document.createElement('span');
+            viewsSpan.className = 'post-views';
+            viewsSpan.textContent = '👁 ' + views;
+            footer.appendChild(commSpan);
+            footer.appendChild(viewsSpan);
+            footer.addEventListener('click', () => {
+                if (expandedComments.has(post.id)) {
+                    expandedComments.delete(post.id);
+                } else {
+                    expandedComments.add(post.id);
+                }
+                renderChannelPosts();
+            });
+            div.appendChild(footer);
+
+            // Блок комментариев
+            if (expandedComments.has(post.id)) {
+                const block = document.createElement('div');
+                block.className = 'comments-block';
+                const list = post.comments || {};
+                const ids = Object.keys(list).sort((a, b) => (list[a].ts || 0) - (list[b].ts || 0));
+                if (ids.length === 0) {
+                    const none = document.createElement('div');
+                    none.className = 'item-sub';
+                    none.textContent = 'Пока нет комментариев — будь первым!';
+                    block.appendChild(none);
+                }
+                ids.forEach(cid => {
+                    const cm = list[cid];
+                    const line = document.createElement('div');
+                    line.className = 'comment-item';
+                    const a = document.createElement('span');
+                    a.className = 'comment-author';
+                    a.textContent = cm.name || 'Пользователь';
+                    const t = document.createElement('span');
+                    t.className = 'comment-text';
+                    t.textContent = cm.text;
+                    line.appendChild(a);
+                    line.appendChild(t);
+                    block.appendChild(line);
+                });
+
+                const inputRow = document.createElement('div');
+                inputRow.className = 'comment-input-row';
+                const inp = document.createElement('input');
+                inp.type = 'text';
+                inp.placeholder = 'Написать комментарий...';
+                inp.maxLength = 500;
+                const btn = document.createElement('button');
+                btn.textContent = '➤';
+                const sendComment = async () => {
+                    const val = inp.value.trim();
+                    if (!val || !currentUser) return;
+                    try {
+                        await push(ref(db, 'channelPosts/' + post.id + '/comments'), {
+                            uid: currentUser.uid,
+                            name: userName(findUser(currentUser.uid)),
+                            text: val,
+                            ts: Date.now()
+                        });
+                    } catch (e) {
+                        toast('Ошибка: ' + e.message, 'error');
+                        return;
+                    }
+                    inp.value = '';
+                };
+                btn.addEventListener('click', sendComment);
+                inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendComment(); });
+                inputRow.appendChild(inp);
+                inputRow.appendChild(btn);
+                block.appendChild(inputRow);
+                div.appendChild(block);
+            }
+
+            return div;
+        }
 
         // ===== Профиль =====
         function renderProfile() {
@@ -1658,6 +2095,19 @@
             }
         });
 
+        // ===== СТАТУС: ОНЛАЙН / ВРЕМЯ ЗАХОДА =====
+        function startPresence() {
+            if (presenceUnsub) { presenceUnsub(); presenceUnsub = null; }
+            const statusRef = ref(db, 'users/' + currentUser.uid);
+            presenceUnsub = onValue(ref(db, '.info/connected'), (snap) => {
+                if (snap.val() === true) {
+                    onDisconnect(statusRef).update({ online: false, lastSeen: Date.now() })
+                        .then(() => update(statusRef, { online: true, lastSeen: Date.now() }))
+                        .catch(() => {});
+                }
+            });
+        }
+
         // ===== Авторизация =====
         onAuthStateChanged(auth, (user) => {
             currentUser = user;
@@ -1673,6 +2123,7 @@
             }
             ensureProfile(user);
             startListeners();
+            startPresence();
             renderProfile();
             showFull('welcomeScreen');
         });
