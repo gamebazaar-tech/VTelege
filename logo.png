@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<body style="margin:0;background:#111;display:flex;justify-content:center;align-items:center;height:100vh;">
+<canvas id="c" width="512" height="512"></canvas>
+<script>
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const g = ctx.createLinearGradient(0, 0, 512, 512);
+g.addColorStop(0, '#00b4ff');
+g.addColorStop(1, '#bc13fe');
+ctx.fillStyle = g;
+ctx.beginPath();
+ctx.arc(256, 256, 256, 0, Math.PI * 2);
+ctx.fill();
+ctx.fillStyle = '#fff';
+ctx.font = 'bold 300px Arial';
+ctx.textAlign = 'center';
+ctx.textBaseline = 'middle';
+ctx.fillText('C', 256, 266);
+</script>
+</body>
+</html>
